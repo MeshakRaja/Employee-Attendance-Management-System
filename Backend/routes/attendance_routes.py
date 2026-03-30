@@ -5,11 +5,16 @@ from datetime import datetime
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+import pytz  # For timezone handling
 
 from database import DATABASE
 from face_service import recognize_face
 
 attendance_bp = Blueprint("attendance", __name__)
+
+# Helper to get current Indian Time
+def get_india_now():
+    return datetime.now(pytz.timezone('Asia/Kolkata'))
 
 def send_notification_email(employee_name, employee_id, department, date, late_minutes):
     sender_email = os.getenv("ATTENDANCE_SMTP_USER", "").strip()
@@ -71,8 +76,11 @@ def mark_attendance():
     employee = c.fetchone()
 
     if employee:
+        # Get India Time
+        india_now = get_india_now()
+        today = india_now.strftime("%Y-%m-%d")
+
         # Check if already marked today
-        today = datetime.now().strftime("%Y-%m-%d")
         c.execute("SELECT * FROM attendance WHERE employee_id=? AND date=?", (employee[2], today))
         existing = c.fetchone()
 
@@ -80,10 +88,14 @@ def mark_attendance():
             conn.close()
             return jsonify({"message": "Attendance already marked for today"})
 
-        login_time = datetime.now().strftime("%H:%M")
-        official_start = datetime.strptime("10:00", "%H:%M")
-        actual_login = datetime.strptime(login_time, "%H:%M")
-        late_minutes = max(0, int((actual_login - official_start).total_seconds() // 60))
+        login_time = india_now.strftime("%H:%M")
+        official_start = datetime.strptime("10:00", "%H:%M").replace(year=india_now.year, month=india_now.month, day=india_now.day)
+
+        # Calculate late minutes based on India time
+        actual_login = india_now.replace(tzinfo=None)
+        official_start_naive = official_start.replace(tzinfo=None)
+
+        late_minutes = max(0, int((actual_login - official_start_naive).total_seconds() // 60))
 
         c.execute("""
         INSERT INTO attendance(employee_id,name,department,date,login_time,late_minutes)
@@ -130,9 +142,10 @@ def logout_attendance():
     if not employee_id:
         return jsonify({"message": "employee_id required"}), 400
 
+    india_now = get_india_now()
     conn = sqlite3.connect(DATABASE)
     c = conn.cursor()
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = india_now.strftime("%Y-%m-%d")
 
     c.execute(
         "SELECT id FROM attendance WHERE employee_id=? AND date=?",
@@ -150,7 +163,7 @@ def logout_attendance():
         conn.close()
         return jsonify({"message": "Employee not found"}), 404
 
-    logout_time = datetime.now().strftime("%H:%M")
+    logout_time = india_now.strftime("%H:%M")
     c.execute(
         "UPDATE attendance SET logout_time=? WHERE id=?",
         (logout_time, row[0]),
